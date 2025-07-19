@@ -1,3 +1,5 @@
+// decoder.go provides parsing logic for incoming TSL v5 payloads into structured Packet types.
+
 package v5
 
 import (
@@ -32,7 +34,7 @@ func UnmarshalPacket(data []byte) (*Packet, error) {
 
 		if msg.ControlWord&0x8000 != 0 {
 			// Control data – not implemented yet
-			return nil, errors.New("control data parsing not supported yet")
+			return nil, errors.New("parsing of control-type messages (MSB set) is not implemented")
 		}
 
 		if cursor+2 > len(data) {
