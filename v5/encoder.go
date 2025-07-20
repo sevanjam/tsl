@@ -5,7 +5,9 @@ import (
 	"errors"
 )
 
-func (d DMSG) MarshalBinary() ([]byte, error) {
+// MarshalBinary serializes the DisplayMessage into TSL v5 binary format.
+// Returns an error if the text field is too long (>2048 bytes).
+func (d DisplayMessage) MarshalBinary() ([]byte, error) {
 	textBytes := []byte(d.Text)
 
 	if len(textBytes) > 2048 {
@@ -21,6 +23,9 @@ func (d DMSG) MarshalBinary() ([]byte, error) {
 	return out, nil
 }
 
+// MarshalBinary serializes the Packet into TSL v5 binary format,
+// including all contained DisplayMessages. Sets the byte count (PBC) field
+// automatically in little-endian order.
 func (p Packet) MarshalBinary() ([]byte, error) {
 	payload := make([]byte, 6) // PBC, Version, Flags, Screen
 	payload[2] = p.Version

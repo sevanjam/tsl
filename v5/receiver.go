@@ -7,29 +7,31 @@ import (
 )
 
 const (
-	DLE = 0xFE
-	STX = 0x02
+	DLE = 0xFE // Data Link Escape character for TSL v5 (protocol uses 0x10, but your implementation uses 0xFE)
+	STX = 0x02 // Start of Text marker (TSL packet start)
 )
 
 // PacketHandler is the callback you implement to process incoming TSL V5 packets.
-// It provides the sender address and the raw unwrapped data.
+// It provides the sender address and the raw de-framed, de-stuffed packet bytes.
 type PacketHandler func(src net.Addr, data []byte)
 
 // StartReceiver starts a TCP or UDP listener on the given port.
 // For TCP, it handles DLE/STX framing and DLE byte unstuffing internally.
-func StartReceiver(proto string, port int, handler PacketHandler) error {
-	switch proto {
+// The handler function is called for each decoded packet.
+func StartReceiver(protocol string, port int, handler PacketHandler) error {
+	switch protocol {
 	case "udp":
 		return startUDPReceiver(port, handler)
 	case "tcp":
 		return startTCPReceiver(port, handler)
 	default:
-		return fmt.Errorf("unsupported protocol: %s", proto)
+		return fmt.Errorf("unsupported protocol: %s", protocol)
 	}
 }
 
 // --- UDP Receiver Implementation ---
 
+// startUDPReceiver listens for UDP packets on the given port and calls the handler for each datagram.
 func startUDPReceiver(port int, handler PacketHandler) error {
 	addr := net.UDPAddr{
 		IP:   net.IPv4zero,
@@ -59,6 +61,7 @@ func startUDPReceiver(port int, handler PacketHandler) error {
 
 // --- TCP Receiver Implementation ---
 
+// startTCPReceiver listens for TCP connections on the given port and handles TSL v5 packet framing.
 func startTCPReceiver(port int, handler PacketHandler) error {
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
@@ -80,6 +83,8 @@ func startTCPReceiver(port int, handler PacketHandler) error {
 	return nil
 }
 
+// handleTCPConnection reads data from a single TCP client,
+// extracts and un-stuffs framed TSL v5 packets, and calls the handler for each.
 func handleTCPConnection(conn net.Conn, handler PacketHandler) {
 	defer conn.Close()
 
@@ -111,6 +116,8 @@ func handleTCPConnection(conn net.Conn, handler PacketHandler) {
 
 // --- TCP Framing: Extract one full framed and unstuffed packet from the buffer ---
 
+// extractFramedPacket scans the buffer for a DLE/STX-framed packet, de-stuffs double DLE bytes,
+// and returns the payload with any remaining data in the buffer.
 func extractFramedPacket(data []byte) ([]byte, []byte, bool) {
 	start := bytes.Index(data, []byte{DLE, STX})
 	if start == -1 {

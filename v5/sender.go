@@ -1,92 +1,89 @@
 package v5
 
 import (
-	"bytes"
 	"fmt"
 	"net"
 )
 
+// Sender represents a network sender for TSL v5 packets over TCP or UDP.
 type Sender struct {
-	proto string
-	addr  string
-	tcp   net.Conn
-	udp   *net.UDPConn
+	protocol string   // Protocol ("tcp" or "udp")
+	addr     string   // Destination address (ip:port)
+	udp      net.Conn // UDP connection (if proto is "udp")
+	tcp      net.Conn // TCP connection (if proto is "tcp")
 }
 
-// NewSender connects to a remote TSL V5 device
-func NewSender(proto, ip string, port int) (*Sender, error) {
-	addr := fmt.Sprintf("%s:%d", ip, port)
-	s := &Sender{
-		proto: proto,
-		addr:  addr,
-	}
+// NewSender creates a new Sender for the given protocol ("tcp" or "udp"), IP address, and port.
+// Returns a pointer to Sender or an error if the connection could not be established.
+func NewSender(protocol, ip string, port int) (*Sender, error) {
+	LogInfof("Initializing sender to %s:%d over %s", ip, port, protocol)
 
-	switch proto {
+	addr := fmt.Sprintf("%s:%d", ip, port)
+	s := &Sender{protocol: protocol, addr: addr}
+
+	switch protocol {
 	case "udp":
-		remoteAddr, err := net.ResolveUDPAddr("udp4", addr)
+		conn, err := net.Dial("udp", addr)
 		if err != nil {
-			return nil, fmt.Errorf("resolve UDP addr: %w", err)
-		}
-		conn, err := net.DialUDP("udp", nil, remoteAddr)
-		if err != nil {
-			return nil, fmt.Errorf("dial UDP: %w", err)
+			LogErrorf("Failed to connect UDP to %s: %v", addr, err)
+			return nil, err
 		}
 		s.udp = conn
-
+		LogInfof("UDP sender connected to %s", addr)
 	case "tcp":
-		conn, err := net.Dial("tcp4", addr)
+		conn, err := net.Dial("tcp", addr)
 		if err != nil {
-			return nil, fmt.Errorf("dial TCP: %w", err)
+			LogErrorf("Failed to connect TCP to %s: %v", addr, err)
+			return nil, err
 		}
 		s.tcp = conn
-
+		LogInfof("TCP sender connected to %s", addr)
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", proto)
+		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
-
 	return s, nil
 }
 
-// Send transmits raw TSL V5 packet data
-func (s *Sender) Send(data []byte) error {
-	switch s.proto {
-	case "udp":
-		_, err := s.udp.Write(data)
-		return err
-
-	case "tcp":
-		framed := frameTCP(data)
-		_, err := s.tcp.Write(framed)
-		return err
-
-	default:
-		return fmt.Errorf("unknown protocol: %s", s.proto)
+// Send writes a raw byte payload to the established connection (TCP or UDP).
+// Returns the number of bytes sent and any error encountered.
+func (s *Sender) Send(data []byte) (int, error) {
+	if s.protocol == "udp" && s.udp != nil {
+		n, err := s.udp.Write(data)
+		LogInfof("Sent %d bytes via UDP to %s", n, s.addr)
+		return n, err
 	}
+	if s.protocol == "tcp" && s.tcp != nil {
+		data = wrapTSLV5Packet(data)
+		n, err := s.tcp.Write(data)
+		LogInfof("Sent %d bytes via TCP to %s", n, s.addr)
+		return n, err
+	}
+	return 0, fmt.Errorf("connection not established")
 }
 
-// Close shuts down the connection
-func (s *Sender) Close() error {
-	if s.tcp != nil {
-		return s.tcp.Close()
-	}
+// Close shuts down the sender's network connection.
+func (s *Sender) Close() {
 	if s.udp != nil {
-		return s.udp.Close()
+		s.udp.Close()
 	}
-	return nil
+	if s.tcp != nil {
+		s.tcp.Close()
+	}
 }
+func wrapTSLV5Packet(payload []byte) []byte {
+	const DLE = 0xFE
+	const STX = 0x02
 
-// frameTCP adds DLE/STX at the beginning and escapes all DLE bytes
-func frameTCP(data []byte) []byte {
-	var buf bytes.Buffer
-	buf.WriteByte(DLE)
-	buf.WriteByte(STX)
-
-	for _, b := range data {
-		buf.WriteByte(b)
+	// Byte-stuffing: any occurrence of DLE becomes DLE DLE
+	stuffed := make([]byte, 0, len(payload)+8)
+	for _, b := range payload {
+		stuffed = append(stuffed, b)
 		if b == DLE {
-			buf.WriteByte(DLE) // Byte-stuffing for DLE
+			stuffed = append(stuffed, DLE)
 		}
 	}
-
-	return buf.Bytes()
+	// Wrap with DLE/STX at the start (NO ETX required per your protocol version)
+	wrapped := []byte{DLE, STX}
+	wrapped = append(wrapped, stuffed...)
+	return wrapped
 }

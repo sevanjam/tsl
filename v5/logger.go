@@ -1,96 +1,127 @@
 package v5
 
 import (
-	"bytes"
-	"io"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 )
 
 var (
-	logger       *log.Logger
-	logFile      *os.File
-	memoryBuffer *circularBuffer
+	logToConsole  bool
+	logToFile     bool
+	logDir        string
+	fileLogger    *log.Logger
+	consoleLogger *log.Logger
+	logFile       *os.File
+	lastLogDate   string
+	logLock       sync.Mutex
 )
 
-func InitLogger(toFile bool, filepath string) error {
-	var output io.Writer
+// InitLogger sets up the logging system.
+// Enable or disable console/file logging independently.
+// logDir specifies the directory for daily log files.
+func InitLogger(enableConsole bool, enableFile bool, dir string) error {
+	logToConsole = enableConsole
+	logToFile = enableFile
+	logDir = dir
+	lastLogDate = ""
 
-	memoryBuffer = newCircularBuffer(50)
-
-	if toFile {
-		f, err := os.OpenFile(filepath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
+	if logToFile {
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("failed to create log directory: %w", err)
 		}
-		logFile = f
-		output = io.MultiWriter(os.Stdout, f, memoryBuffer)
-	} else {
-		output = io.MultiWriter(os.Stdout, memoryBuffer)
 	}
-
-	logger = log.New(output, "", log.LstdFlags|log.Lshortfile)
+	consoleLogger = log.New(os.Stdout, "", 0)
 	return nil
 }
 
-func Logf(format string, args ...interface{}) {
-	if logger != nil {
-		logger.Printf(format, args...)
+// LogInfof logs an informational message.
+func LogInfof(format string, args ...interface{}) {
+	logf("INFO", format, args...)
+}
+
+// LogWarnf logs a warning message.
+func LogWarnf(format string, args ...interface{}) {
+	logf("WARN", format, args...)
+}
+
+// LogErrorf logs an error message.
+func LogErrorf(format string, args ...interface{}) {
+	logf("ERROR", format, args...)
+}
+
+// CloseLogger flushes and closes the file logger if open.
+func CloseLogger() {
+	logLock.Lock()
+	defer logLock.Unlock()
+
+	if logFile != nil {
+		logFile.Close()
+		logFile = nil
 	}
 }
 
-func CloseLogger() {
+// logf is the internal shared formatter and writer for all log levels.
+func logf(level string, format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	fullMessage := fmt.Sprintf("[%s] [TSL] [%s] %s", timestamp, level, message)
+
+	logLock.Lock()
+	defer logLock.Unlock()
+
+	// Console color output
+	if logToConsole {
+		colored := colorWrap(level, fullMessage)
+		consoleLogger.Println(colored)
+	}
+
+	// File logging
+	if logToFile {
+		rotateLogFileIfNeeded()
+		if fileLogger != nil {
+			fileLogger.Println(fullMessage)
+		}
+	}
+}
+
+// rotateLogFileIfNeeded checks if the current log file matches today and creates a new one if necessary.
+func rotateLogFileIfNeeded() {
+	currentDate := time.Now().Format("2006-01-02")
+	if currentDate == lastLogDate && logFile != nil {
+		return
+	}
+
 	if logFile != nil {
 		logFile.Close()
 	}
-}
 
-func SnapshotLog() []string {
-	if memoryBuffer != nil {
-		return memoryBuffer.Snapshot()
-	}
-	return nil
-}
+	filename := fmt.Sprintf("TSLLog-%s.log", currentDate)
+	fullPath := filepath.Join(logDir, filename)
 
-type circularBuffer struct {
-	mu     sync.Mutex
-	lines  []string
-	max    int
-	cursor int
-	full   bool
-}
-
-func newCircularBuffer(size int) *circularBuffer {
-	return &circularBuffer{
-		lines: make([]string, size),
-		max:   size,
-	}
-}
-
-func (cb *circularBuffer) Write(p []byte) (n int, err error) {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	cb.lines[cb.cursor] = string(bytes.TrimSpace(p))
-	cb.cursor = (cb.cursor + 1) % cb.max
-	if cb.cursor == 0 {
-		cb.full = true
+	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		consoleLogger.Printf("[TSL] [ERROR] Failed to open log file: %v", err)
+		logToFile = false
+		return
 	}
 
-	return len(p), nil
+	logFile = f
+	fileLogger = log.New(logFile, "", 0)
+	lastLogDate = currentDate
 }
 
-func (cb *circularBuffer) Snapshot() []string {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	var out []string
-	if cb.full {
-		out = append(out, cb.lines[cb.cursor:]...)
-		out = append(out, cb.lines[:cb.cursor]...)
-	} else {
-		out = append(out, cb.lines[:cb.cursor]...)
+// colorWrap applies ANSI color codes for console output based on log level.
+func colorWrap(level string, msg string) string {
+	switch level {
+	case "ERROR":
+		return "\033[31m" + msg + "\033[0m"
+	case "WARN":
+		return "\033[33m" + msg + "\033[0m"
+	default:
+		return msg
 	}
-	return out
 }
