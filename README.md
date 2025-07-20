@@ -1,6 +1,10 @@
 
 # TSL v5 Go Module
 
+
+This documentation is written using ChatGPT and still isn't reviewed by the Author ... 
+
+
 A reliable, production-grade Go module for the [TSL UMD v5 protocol](https://www.tslproducts.com/umd/). Supports both receiver and sender operation, with robust logging and flexible deployment.
 
 ---
